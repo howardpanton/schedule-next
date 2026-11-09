@@ -4,7 +4,7 @@ Build the same broadcast-schedule app as Tutorial 1, this time with Next.js: a l
 
 This tutorial assumes you have done [Tutorial 1](https://github.com/howardpanton/schedule-react), and points out where Next.js does things differently. You will cover Server and Client Components, Server Actions, Cache Components and Partial Prerendering, the Data Access Layer pattern for authorisation, Proxy, Route Handlers, and how to test all of it.
 
-**Time:** about three hours, in three sittings: steps 1 to 5, 6 to 10, then 11 to 14.
+**Time:** about three hours, in three sittings: steps 1 to 5, 6 to 10, then 11 to 15.
 
 ## How to follow along
 
@@ -34,8 +34,9 @@ This tutorial assumes you have done [Tutorial 1](https://github.com/howardpanton
 12. [End-to-end tests with Playwright](#12-end-to-end-tests-with-playwright)
 13. [The build file: GitHub Actions](#13-the-build-file-github-actions)
 14. [Build for production](#14-build-for-production)
+15. [Code review with Claude Code](#15-code-review-with-claude-code)
 
-After step 14, [the two tutorials side by side](#the-two-tutorials-side-by-side) compares the React and Next.js versions.
+After step 15, [the two tutorials side by side](#the-two-tutorials-side-by-side) compares the React and Next.js versions.
 
 ## What you need
 
@@ -1865,6 +1866,120 @@ Your `package.json` should now look like this:
     "node": ">=24"
   }
 }
+```
+
+## 15. Code review with Claude Code
+
+Every pull request now gets a second reviewer: Claude Code, running in GitHub Actions and posting comments on the lines it has concerns about. It runs on your personal Claude subscription, so there is no API bill, but each review uses some of your plan's usage. Claude Code running in CI is also one of the scenarios in the Claude Certified Architect exam.
+
+**Create a token for your personal account.** You need a Pro or Max plan. The command opens claude.ai in your browser: sign in with your personal account, not a work one. It then prints a long-lived token.
+
+```bash
+claude setup-token
+```
+
+**Store the token as a repository secret.** `gh` asks you to paste it, so it stays out of your shell history:
+
+```bash
+gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+**Install the Claude GitHub app** from [github.com/apps/claude](https://github.com/apps/claude). Choose **Only select repositories** and pick `schedule-next`. The app gives each run a short-lived token for posting comments, scoped to this repository.
+
+> **Note:** running `/install-github-app` inside Claude Code does these three steps for you, but it uses whichever account Claude Code is signed in with. Doing them by hand makes sure the token is your personal one.
+
+Add the workflow:
+
+`.github/workflows/claude-review.yml`
+
+```yaml
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# A new push replaces the review of the old one.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip drafts, and pull requests from forks, which can't read your secrets.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. The repository is a Next.js 16 App Router app with
+            Cache Components on. AGENTS.md describes the conventions.
+
+            Look for:
+            - Bugs and unhandled edge cases, including dates and time zones (times are UTC).
+            - Authorisation: every function in src/lib/data.ts must check the session, and
+              Server Actions and Route Handlers must validate their input. proxy.ts is only
+              an early redirect, never the security check.
+            - The server/client boundary: secrets and server-only modules must not reach a
+              "use client" file.
+            - Rendering: anything that reads cookies, search params or the current time must
+              sit inside a Suspense boundary.
+            - Missing or weak tests for the behaviour that changed.
+
+            Post an inline comment for each real problem, with a suggested fix. Skip style
+            nits that Prettier or ESLint would catch. Finish with one summary comment; if you
+            found nothing worth changing, say so in one line.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+```
+
+- **`claude_code_oauth_token`** signs in with your subscription. The alternative, `anthropic_api_key`, bills an API account by the token.
+- **`--allowedTools`** lists everything Claude may do here: read the pull request and its diff, and post comments. It can't push code or run your scripts.
+- **The `if:` line** skips draft pull requests and pull requests from forks. Forks can't read your secrets anyway, and the action only runs for people with write access to the repository.
+- **`concurrency`** cancels a review in progress when you push again.
+- **Don't make this a required check.** A review that hits a usage limit shouldn't stop you merging.
+
+Add the workflow through a pull request and merge it. This first pull request gets no review, and that is expected: the action skips any pull request that changes its own workflow file, and starts working once the file is on `main`.
+
+```bash
+git switch main && git pull
+git switch -c ci/claude-review
+git add .github/workflows/claude-review.yml
+git commit -m "Review pull requests with Claude Code" && git push -u origin ci/claude-review
+gh pr create --fill
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+```
+
+**Now give it something to find.** Remove the session check from the schedule's data function. The page still looks fine, because `proxy.ts` redirects signed-out visitors, but the Data Access Layer no longer enforces anything:
+
+```bash
+git switch main && git pull
+git switch -c try/claude-review
+sed -i '' '/export async function getSchedule/{n;d;}' src/lib/data.ts   # on Linux: sed -i
+git commit -am "Tidy the schedule data function" && git push -u origin try/claude-review
+gh pr create --fill
+gh pr checks --watch
+gh pr view --web   # the inline comments are on the Files changed tab
+```
+
+CI stays green, because no test covers this, so here the review is the only thing that notices. Claude should point out that `getSchedule` no longer calls `getCurrentUser()`, and that Proxy alone isn't an authorisation check. Read what the review says, then close the pull request without merging:
+
+```bash
+gh pr close --delete-branch
 ```
 
 ## Where to go next
