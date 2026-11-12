@@ -38,6 +38,21 @@ This tutorial assumes you have done [Tutorial 1](https://github.com/howardpanton
 
 After step 15, [the two tutorials side by side](#the-two-tutorials-side-by-side) compares the React and Next.js versions.
 
+<!-- checks-intro -->
+> **How the checks work**
+>
+> This tutorial has 5 checks. They add about 65 minutes, and they're where you practise designing rather than typing.
+>
+> - **Decision** checks stop at a real design choice. Decide first, then open the answer.
+> - **Predict** checks ask what will happen before you run something.
+> - **Break it** checks have you remove a safeguard on purpose and see what catches it.
+> - **Write it** checks give you the test, not the code.
+>
+> Not every tutorial uses all four kinds.
+>
+> Write your answers in `docs/decisions.md` in your own repository before you open anything. Being wrong first is how the lesson sticks. If the repository checks formatting, run its formatter on that file before you commit it.
+<!-- /checks-intro -->
+
 ## What you need
 
 - Node 24, Git and the GitHub CLI, as in Tutorial 1.
@@ -184,6 +199,77 @@ npm run format
 
 ## 4. Sessions, users and the Data Access Layer
 
+<!-- check: decision 2.1 | 15 min -->
+#### Decision 2.1: How does the app remember who is signed in?
+
+**The situation:** the comparison table at the top mentioned how this app keeps its session. Decide for yourself before you read the code. Tutorial 1 kept sessions in a `Map` inside its API. This app has no separate API, and Next.js may run as several server instances, or as serverless functions that start and stop. Every request still has to say which user it belongs to. There's one demo user, signing in with an email and password.
+
+**Constraints (must):**
+
+- The signed-in user survives from one request to the next, on any server instance
+- No database or extra service in this tutorial
+- Nothing in the browser can be changed to become another user
+
+**Preferences (nice to have):**
+
+- Signing out on one device can end a stolen session
+- Nothing secret visible to someone holding the cookie
+- Every line understood and tested here, with no dependency for features you don't use
+
+**The options:**
+
+- **A random session id with a server-side store,** as in Tutorial 1, but kept in a database or Redis so every instance sees it.
+- **A signed token in an `httpOnly` cookie:** the cookie holds the user id, signed with a secret, and every instance can check the signature.
+- **An authentication library,** such as Better Auth or Auth.js. It handles sessions, sign-in providers and cookies for you, and can keep the session in an encrypted cookie, so it needs no store either.
+
+**Your turn:** pick one and write three lines in `docs/decisions.md`: what you chose, the one thing that decided it, and what you're giving up.
+
+<details>
+<summary>Then compare: what this tutorial chose, and why</summary>
+
+**What this tutorial chose:** a signed token in an `httpOnly` cookie, an HS256 JWT made with `jose`. A store breaks "no extra service", so it came down to the cookie or a library. For one email-and-password user, about forty lines you can read and test beat a dependency built for providers, multi-factor sign-in and password resets you don't need yet.
+
+**What it cost:**
+
+- No revocation. Signing out deletes the cookie in that browser, but a copied cookie keeps working until it expires, up to 8 hours later.
+- The token is signed, not encrypted, so anyone holding it can read the user id inside. An encrypted cookie, which a library would give you, wouldn't show it.
+- Changing `SESSION_SECRET` signs everyone out at once.
+
+**When another option wins:**
+
+- **A server-side store:** when you need "sign out everywhere", an admin who can end sessions, or a record of who is signed in.
+- **An authentication library:** as soon as real users need social sign-in, multi-factor authentication or password resets. Tutorial 16 goes further and runs its own identity provider.
+
+**Say it in an interview (about 30 seconds):**
+
+> "With no separate API and possibly many server instances, I kept the session in a signed JWT in an httpOnly cookie. Any instance can verify it with a shared secret, so there's no store to run, and it's a few dozen lines I fully understand. The trade-off is revocation: logout only clears the cookie in that browser, and a stolen token works until it expires, so I kept the lifetime to eight hours. With real users needing social sign-in or MFA, I'd move to an auth library rather than grow this by hand."
+
+**Follow-up questions to practise:**
+
+<details>
+<summary>1. How would you add "sign out everywhere" without a full session store?</summary>
+
+Give each user a session version number in the database and put it in the token. Bumping the number makes every older token fail the check. It costs one small lookup per request, which brings back some of the state you avoided.
+
+</details>
+
+<details>
+<summary>2. Why HS256 with one secret, rather than a public-key algorithm?</summary>
+
+Only this app signs and checks the token, so one shared secret is enough. A public-key algorithm such as RS256 or EdDSA matters when other services must verify tokens without being able to create them.
+
+</details>
+
+<details>
+<summary>3. What stops someone editing the user id in their cookie?</summary>
+
+The signature. Change any byte of the payload and `jwtVerify` rejects the token, so `readSession` returns `null` and the request is treated as signed out.
+
+</details>
+
+</details>
+<!-- /check -->
+
 ```bash
 npm install jose zod server-only
 ```
@@ -275,6 +361,75 @@ export async function deleteSession(): Promise<void> {
 - The token only holds the user id. It is signed, not encrypted, so anyone can read its contents; they just can't change them without the secret.
 - `readSession` returns `null` for a missing, tampered or expired token, so callers never handle exceptions.
 - `cookies()` is async in Next.js 15 and later.
+
+<!-- check: decision 2.2 | 15 min -->
+#### Decision 2.2: Where should the "is this person signed in?" check live?
+
+**The situation:** the comparison table at the top and this step's title already name the approach; decide for yourself before you read how it works. The dashboard page, the schedule page and later a JSON endpoint all need schedule data, the layout around them shows who is signed in, and only signed-in users may see the schedule. Next.js prerenders what it can, streams the rest, and doesn't re-render a layout when you move between the pages inside it.
+
+**Constraints (must):**
+
+- Every page that shows schedule data checks the session
+- A signed-out visitor never sees schedule data
+
+**Preferences (nice to have):**
+
+- Signed-out visitors are sent to the login page quickly, and come back afterwards
+- The check is written once, not repeated in every page
+- Code added later is protected without its author having to remember
+
+**The options:**
+
+- **In Proxy** (`proxy.ts`, which runs before matching requests): redirect anyone without a valid cookie.
+- **In each page and layout:** every page reads the session at the top and redirects.
+- **In a Data Access Layer:** pages get data through a few server-only functions, and each one checks the session before returning anything.
+
+**Your turn:** pick one, or a combination, and write three lines in `docs/decisions.md`: what you chose, the one thing that decided it, and what you're giving up.
+
+<details>
+<summary>Then compare: what this tutorial chose, and why</summary>
+
+**What this tutorial chose:** the Data Access Layer as the real check, with Proxy added in step 6 as an early redirect. The check sits beside the data, so any page, layout or component that calls `getSchedule()` gets it.
+
+**What it cost:**
+
+- It's a convention, and nothing enforces it. Pages could import the schedule code directly; the Route Handler in step 10 does exactly that, with its own session check. Remove `getCurrentUser()` from `getSchedule()` after step 11 and all 25 tests still pass.
+- The session is read in several places per request; `"use cache: private"` keeps that cheap.
+
+**When another option wins:**
+
+- **Proxy on its own:** never as the only gate. In 2025, CVE-2025-29927 let a crafted header skip Next.js middleware in self-hosted apps, and those that checked only there were exposed. It's still worth having as a shortcut.
+- **Checks in each page:** fine for a two-page app, but a check in a layout doesn't run again when you move between its pages, and endpoints that reuse the data miss it.
+
+**Say it in an interview (about 30 seconds):**
+
+> "I put authorisation in a Data Access Layer: pages get data through a few server-only functions, and each one checks the session first, so the check travels with the data. Proxy still redirects signed-out visitors early, but only as a convenience; after the 2025 middleware bypass I don't trust it as the gate. The weakness is that it's a convention, so I'd back it with a test per data function that expects a redirect without a session."
+
+**Follow-up questions to practise:**
+
+<details>
+<summary>1. Why isn't a check in the layout enough?</summary>
+
+Layouts don't re-render when you navigate between the pages inside them, so a check in the layout runs once, not on every page. The page's own data call is what runs every time.
+
+</details>
+
+<details>
+<summary>2. What does `import "server-only"` add?</summary>
+
+It makes the build fail if a Client Component imports the module, so the session code and the data functions can't end up in the browser bundle by accident. It protects where the code runs, not who may call it.
+
+</details>
+
+<details>
+<summary>3. How would you make sure nobody forgets the check?</summary>
+
+A test per data function that calls it with no session and expects a redirect to `/login`, plus review. Some teams also lint for imports of the data code from anywhere outside the layer.
+
+</details>
+
+</details>
+<!-- /check -->
 
 ### Users and the current user
 
@@ -1054,6 +1209,48 @@ export function AutoRefresh({ everyMs = 60_000 }: { everyMs?: number }) {
 }
 ```
 
+<!-- check: break 2.3 | 10 min -->
+#### Break it 2.3: Delete Proxy
+
+Commit your work first, so you can put everything back.
+
+1. Delete `src/proxy.ts`.
+2. Predict: when you're signed out, what status does `curl -i http://localhost:3000/dashboard` get, and where does a browser end up?
+3. With `npm run dev` running, run the `curl`, then open `/dashboard` in a private window.
+
+<details>
+<summary>What catches it</summary>
+
+With Proxy, `curl` gets `307` to `/login?next=%2Fdashboard`. Without it, it gets `200`: the prerendered shell is sent at once, and the redirect arrives later in the streamed part of the page (you'll see `NEXT_REDIRECT;replace;/login;307` in the body). The browser still lands on `/login`, because `getCurrentUser()` runs and redirects, but without `?next=`. Someone following a deep link, to a page you'll add later, would land on the dashboard after signing in instead of where they were going.
+
+So the data stayed safe with no Proxy at all: Proxy only ever saved a round trip and kept the return address.
+
+Put it back with `git restore src/proxy.ts`.
+
+</details>
+<!-- /check -->
+
+The dashboard request you've just built, from the click to the live figures:
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant P as proxy.ts
+  participant N as Next.js server
+  participant A as Data Access Layer
+  B->>P: GET /dashboard with the session cookie
+  P->>P: Verify the cookie's signature
+  P->>N: Signed in, carry on
+  N-->>B: The shell prerendered at build time: header, heading, loading placeholders
+  N->>A: UserMenu calls getCurrentUser()
+  A-->>N: The user, cached for this request
+  N-->>B: Streams the user menu
+  N->>A: The page calls getDashboard()
+  A->>A: getCurrentUser(), then connection()
+  A-->>N: Live figures for Date.now()
+  N-->>B: Streams the dashboard
+```
+
 ## 9. The schedule view
 
 `src/app/(app)/schedule/page.tsx`
@@ -1378,6 +1575,77 @@ npm run dev
 
 Open http://localhost:3000, which redirects to the login page, and sign in with `demo@example.com` / `password123`. Next's dev overlay (the round button, bottom left) shows errors and routing details.
 
+<!-- check: decision 2.4 | 15 min -->
+#### Decision 2.4: How should other clients get the schedule as JSON?
+
+**The situation:** the introduction said how this app will do it; decide for yourself first. The pages read data on the server and need no API. Now a script, and later perhaps a mobile app, need the schedule as JSON, with the same rule that only signed-in users can read it.
+
+**Constraints (must):**
+
+- Other programs can fetch it with a plain HTTP `GET`
+- The same access rule as the pages
+
+**Preferences (nice to have):**
+
+- A URL other programs can rely on across releases
+- Nothing new to deploy and run
+- Reuses the schedule code the pages use
+- Can grow on its own later, if many clients come to depend on it
+
+**The options:**
+
+- **A Route Handler** in this app: a `route.ts` file that answers `GET /api/schedule`.
+- **A Server Action that returns the schedule,** called by the other clients.
+- **A separate API service,** like the Fastify API in Tutorial 4.
+
+**Your turn:** pick one and write three lines in `docs/decisions.md`: what you chose, the one thing that decided it, and what you're giving up.
+
+<details>
+<summary>Then compare: what this tutorial chose, and why</summary>
+
+**What this tutorial chose:** a Route Handler. A Server Action fails the plain `GET`: actions are `POST` requests to internal, generated IDs. Between the other two, nothing new to deploy decided it: the handler lives in the same app, imports the same schedule code, and is tested by calling its `GET` function directly.
+
+**What it cost:**
+
+- It shares the app's deployment: releasing one releases the other, and on a single server they compete for the same CPU.
+- It must check the session itself, because Proxy skips `/api` and the handler doesn't go through the Data Access Layer.
+- There's no schema or OpenAPI document, so other clients learn the shape from the code.
+
+**When another option wins:**
+
+- **Server Actions:** for mutations your own UI triggers, such as the login form. Their IDs aren't a contract for other programs.
+- **A separate API:** when many clients depend on it, it needs to scale or release on its own, or another team owns it. Tutorial 4 builds exactly that.
+
+**Say it in an interview (about 30 seconds):**
+
+> "The pages read data straight from server code, so they need no API. For other clients I added a Route Handler: a stable GET in the same app, reusing the same schedule code, with its own session check because middleware skips the API path. Server Actions stay for my own forms, since they're POSTs to generated IDs, not a public contract. If several clients came to depend on it, I'd move it into its own service with a schema."
+
+**Follow-up questions to practise:**
+
+<details>
+<summary>1. Why not call your own Route Handler from a Server Component?</summary>
+
+It adds an HTTP round trip to reach code you can import directly, and the request loses the user's cookies unless you forward them. Server Components call the functions underneath.
+
+</details>
+
+<details>
+<summary>2. How would a mobile app sign in to this API?</summary>
+
+Not in a supported way. The only sign-in is the login Server Action: a plain `POST`, but to an ID generated for each build, which isn't a contract. A mobile client needs an endpoint that issues tokens, as in Tutorial 4, or an identity provider, as in Tutorial 16.
+
+</details>
+
+<details>
+<summary>3. What would make you add an OpenAPI document?</summary>
+
+Other teams or apps building against the API. A schema lets them generate types and catch breaking changes, and lets you check the code still matches the contract.
+
+</details>
+
+</details>
+<!-- /check -->
+
 ## 10. The JSON API: a Route Handler
 
 Pages don't need an API: they read data on the server. But a mobile app or a script does. A `route.ts` file in `app` handles HTTP requests for its path.
@@ -1411,6 +1679,32 @@ export async function GET(request: NextRequest) {
 It checks the session itself, because Proxy skips `/api`, and returns 401 without one. Signed in, open http://localhost:3000/api/schedule?channel=news in the same browser and you get JSON.
 
 > **Next.js concept: Server Actions or Route Handlers?** Use a Server Action for mutations your own UI triggers, such as a form. Use a Route Handler when something other than your pages calls it: other apps, webhooks, public APIs. Don't call your own Route Handlers from Server Components. That adds an HTTP round trip to reach code you could import directly.
+
+### How the pieces fit
+
+```mermaid
+flowchart LR
+  browser([Browser])
+  client([A script])
+  subgraph next["Next.js app :3000"]
+    proxy["proxy.ts<br/>early redirect from the cookie"]
+    pages["Server Components<br/>dashboard and schedule"]
+    actions["Server Actions<br/>login and logout"]
+    dal["Data Access Layer<br/>getCurrentUser, then the data"]
+    route["Route Handler /api/schedule<br/>checks the session itself"]
+    sched["Schedule code<br/>a fixed daily running order"]
+  end
+  browser --> proxy
+  proxy --> pages
+  proxy -- "form posts" --> actions
+  actions -- "sets or clears the session cookie" --> browser
+  pages --> dal
+  dal --> sched
+  client -- "session cookie, no Proxy" --> route
+  route --> sched
+```
+
+One app does everything: pages read data on the server through the Data Access Layer, forms post to Server Actions, and only outside clients use the Route Handler, which Proxy never sees.
 
 ## 11. Unit and component tests
 
@@ -1612,6 +1906,25 @@ describe("GET /api/schedule", () => {
 ```bash
 npm test
 ```
+
+<!-- check: break 2.5 | 10 min -->
+#### Break it 2.5: Trust the `?next` address
+
+Commit your work first, so you can put everything back.
+
+1. In `src/app/actions/auth.ts`, replace the last line of `safeNext` with a common shortcut: `return next.startsWith("/") ? next : "/dashboard";`
+2. Predict: does this still only send people to pages on this site? Which test, if any, fails?
+3. Run `npm test`.
+
+<details>
+<summary>What catches it</summary>
+
+`ignores a ?next that points at another site` fails: "expected [Function] to throw error including 'REDIRECT /dashboard' but got 'REDIRECT //evil.example'". `//evil.example` starts with `/`, but browsers read it as a protocol-relative address on another site. With the shortcut, an attacker can send someone a real login link that bounces them, signed in, to a look-alike site: an open redirect. Parsing the address with `new URL` and comparing origins is what blocks it.
+
+Put it back with `git restore src/app/actions/auth.ts`.
+
+</details>
+<!-- /check -->
 
 ## 12. End-to-end tests with Playwright
 
