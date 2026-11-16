@@ -39,6 +39,7 @@ This tutorial assumes you have done [Tutorial 1](https://github.com/howardpanton
 After step 15, [the two tutorials side by side](#the-two-tutorials-side-by-side) compares the React and Next.js versions.
 
 <!-- checks-intro -->
+
 > **How the checks work**
 >
 > This tutorial has 5 checks. They add about 65 minutes, and they're where you practise designing rather than typing.
@@ -51,6 +52,7 @@ After step 15, [the two tutorials side by side](#the-two-tutorials-side-by-side)
 > Not every tutorial uses all four kinds.
 >
 > Write your answers in `docs/decisions.md` in your own repository before you open anything. Being wrong first is how the lesson sticks. If the repository checks formatting, run its formatter on that file before you commit it.
+
 <!-- /checks-intro -->
 
 ## What you need
@@ -200,6 +202,7 @@ npm run format
 ## 4. Sessions, users and the Data Access Layer
 
 <!-- check: decision 2.1 | 15 min -->
+
 #### Decision 2.1: How does the app remember who is signed in?
 
 **The situation:** the comparison table at the top mentioned how this app keeps its session. Decide for yourself before you read the code. Tutorial 1 kept sessions in a `Map` inside its API. This app has no separate API, and Next.js may run as several server instances, or as serverless functions that start and stop. Every request still has to say which user it belongs to. There's one demo user, signing in with an email and password.
@@ -363,6 +366,7 @@ export async function deleteSession(): Promise<void> {
 - `cookies()` is async in Next.js 15 and later.
 
 <!-- check: decision 2.2 | 15 min -->
+
 #### Decision 2.2: Where should the "is this person signed in?" check live?
 
 **The situation:** the comparison table at the top and this step's title already name the approach; decide for yourself before you read how it works. The dashboard page, the schedule page and later a JSON endpoint all need schedule data, the layout around them shows who is signed in, and only signed-in users may see the schedule. Next.js prerenders what it can, streams the rest, and doesn't re-render a layout when you move between the pages inside it.
@@ -1210,6 +1214,7 @@ export function AutoRefresh({ everyMs = 60_000 }: { everyMs?: number }) {
 ```
 
 <!-- check: break 2.3 | 10 min -->
+
 #### Break it 2.3: Delete Proxy
 
 Commit your work first, so you can put everything back.
@@ -1576,6 +1581,7 @@ npm run dev
 Open http://localhost:3000, which redirects to the login page, and sign in with `demo@example.com` / `password123`. Next's dev overlay (the round button, bottom left) shows errors and routing details.
 
 <!-- check: decision 2.4 | 15 min -->
+
 #### Decision 2.4: How should other clients get the schedule as JSON?
 
 **The situation:** the introduction said how this app will do it; decide for yourself first. The pages read data on the server and need no API. Now a script, and later perhaps a mobile app, need the schedule as JSON, with the same rule that only signed-in users can read it.
@@ -1908,6 +1914,7 @@ npm test
 ```
 
 <!-- check: break 2.5 | 10 min -->
+
 #### Break it 2.5: Trust the `?next` address
 
 Commit your work first, so you can put everything back.
