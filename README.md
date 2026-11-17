@@ -2323,3 +2323,4 @@ gh pr close --delete-branch
 | Loading UI         | `HydrateFallback`, `useNavigation` | `<Suspense>` fallbacks, `loading.tsx`             |
 | API                | separate Hono app                  | Route Handlers in `app/api`                       |
 | Code splitting     | `lazy` per route                   | automatic                                         |
+Reviewed locally.
